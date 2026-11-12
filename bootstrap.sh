@@ -49,8 +49,9 @@ summary() {
   fi
   cat <<'MSG'
     Next:
-    1. Open Docker once and accept its terms.
-    2. Go back to the welcome email and continue with the next step.
+    1. Open Chrome and sign in with your Sonada account.
+    2. Open Docker once and accept its terms.
+    3. Go back to the welcome email and continue with the next step.
 MSG
   ((${#FAILED[@]} == 0))
 }
