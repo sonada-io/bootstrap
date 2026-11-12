@@ -41,6 +41,7 @@ try() {
 tty_run() { "$@" </dev/tty; }
 
 # The last thing every run prints, including runs that stop early.
+# It fails if anything didn't finish, so the whole run exits non-zero.
 summary() {
   say "Done"
   if ((${#FAILED[@]})); then
@@ -51,6 +52,7 @@ summary() {
     1. Open Docker once and accept its terms.
     2. Go back to the welcome email and continue with the next step.
 MSG
+  ((${#FAILED[@]} == 0))
 }
 
 # Everything runs inside main(), called on the last line. Bash then reads the whole file before running any of it,
@@ -159,4 +161,3 @@ main() {
 }
 
 main "$@"
-((${#FAILED[@]} == 0))
