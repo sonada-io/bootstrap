@@ -30,6 +30,8 @@ MILA_MCP="$MILA_APP/Contents/MacOS/mila-mcp"
 MILA_CONFIG_URL="https://raw.githubusercontent.com/sonada-io/bootstrap/main/sonada.milaconfig"
 CLAUDE_DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 CLAUDE="$HOME/.local/bin/claude"
+MILA_CONFIG_DONE="$HOME/Library/Application Support/Sonada/milaconfig-opened"
+MILA_READY=0
 
 # ---- helpers ----------------------------------------------------------------
 say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -64,7 +66,7 @@ summary() {
   local n=1
   echo "    Next:"
   echo "    $((n++)). Open Chrome and sign in with your Sonada account."
-  echo "    $((n++)). Quit Claude and open it again, so it loads Mila."
+  if ((MILA_READY)); then echo "    $((n++)). Quit Claude and open it again, so it loads Mila."; fi
   if [[ "$ROLE" == "rnd" ]]; then echo "    $((n++)). Open Docker once and accept its terms."; fi
   echo "    $((n++)). Go back to the welcome email and continue with the next step."
   ((${#FAILED[@]} == 0))
@@ -94,7 +96,8 @@ claude_code_sign_in() {
   "$CLAUDE" auth status >/dev/null 2>&1
 }
 
-# The latest Mila release from GitHub: download the DMG, copy the app to /Applications.
+# The latest Mila release from GitHub: download the DMG, check Apple's signature, copy the app to /Applications.
+# The copy goes to a temp folder first, so a failed run never leaves a half-copied app behind.
 mila_install() {
   local major url tmp rc=0
   major="$(sw_vers -productVersion | cut -d. -f1)"
@@ -115,18 +118,31 @@ mila_install() {
     hdiutil attach -nobrowse -quiet -mountpoint "$tmp/mnt" "$tmp/Mila.dmg" || rc=$?
   fi
   if ((rc == 0)); then
-    ditto "$tmp/mnt/Mila.app" "$MILA_APP" || rc=$?
+    ditto "$tmp/mnt/Mila.app" "$tmp/Mila.app" || rc=$?
     hdiutil detach -quiet "$tmp/mnt" || true
+  fi
+  if ((rc == 0)); then
+    # curl sets no quarantine flag, so Gatekeeper never looks at this app. Check the signature ourselves.
+    if ! codesign --verify --deep --strict "$tmp/Mila.app" || ! spctl --assess --type execute "$tmp/Mila.app"; then
+      warn "Mila's download isn't signed and notarized by Apple, so it wasn't installed"
+      rc=1
+    fi
+  fi
+  if ((rc == 0)); then
+    rm -rf "$MILA_APP"
+    mv "$tmp/Mila.app" "$MILA_APP" || rc=$?
   fi
   rm -rf "$tmp"
   return "$rc"
 }
 
-# Mila shows what the file changes and asks before applying it.
+# Mila shows what the file changes and asks before applying it. Opened until it worked once, then never again.
 mila_config() {
   local tmp
   tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/sonada.milaconfig" "$MILA_CONFIG_URL" && open "$tmp/sonada.milaconfig"
+  curl -fsSL -o "$tmp/sonada.milaconfig" "$MILA_CONFIG_URL" &&
+    open -a "$MILA_APP" "$tmp/sonada.milaconfig" &&
+    mkdir -p "$(dirname "$MILA_CONFIG_DONE")" && touch "$MILA_CONFIG_DONE"
 }
 
 # Registers Mila's MCP helper in Claude Desktop, keeping any other servers in the file.
@@ -229,16 +245,22 @@ main() {
 
   # ---- 5. Mila -----------------------------------------------------------------
   say "Mila"
-  if [[ -d "$MILA_APP" ]]; then
+  # The MCP helper is the last file in the bundle that matters to us. Without it the app is missing, broken or too old.
+  if [[ -x "$MILA_MCP" ]]; then
     ok "already installed"
   elif mila_install; then
     ok "installed"
-    try "Mila settings" mila_config
   else
     FAILED+=("Mila")
   fi
   if [[ -x "$MILA_MCP" ]]; then
-    try "Mila in Claude Desktop" mila_desktop
+    if [[ ! -e "$MILA_CONFIG_DONE" ]]; then try "Mila settings" mila_config; fi
+    if mila_desktop; then
+      MILA_READY=1
+    else
+      warn "Mila in Claude Desktop failed, continuing"
+      FAILED+=("Mila in Claude Desktop")
+    fi
     if [[ -x "$CLAUDE" ]]; then try "Mila in Claude Code" mila_code; fi
   fi
 
