@@ -15,6 +15,8 @@ Everyone gets:
 
 R&D also gets Docker Desktop, git, gh, uv, Node with npm 11.19, Python 3.15, the AWS CLI and Terraform. Then it signs you in to GitHub and clones `demo` and `skills` into `~/sonada-io`.
 
+Mila is installed only when its download passes Apple's signature and notarization checks and is signed by the Team ID in `MILA_TEAM_ID`.
+
 Mila's access for Claude stays off until you turn it on in Mila (Settings ▸ Storage). That switch is your consent, so the script never flips it.
 
 It is safe to run again, for example on a new laptop: it skips anything already installed. To change what gets installed, edit the lists at the top of `bootstrap.sh` (or `sonada.milaconfig`) and open a PR.

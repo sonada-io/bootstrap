@@ -25,12 +25,17 @@ REPOS=(demo skills)
 DEST="$HOME/sonada-io"
 
 MILA_REPO="island-io/mila"
+# Apple Team ID that signs Mila's releases. Anything signed by another developer is refused, even when notarized.
+# To read it from an installed Mila: codesign -dv /Applications/Mila.app 2>&1 | grep TeamIdentifier
+MILA_TEAM_ID=""
 MILA_APP="/Applications/Mila.app"
 MILA_MCP="$MILA_APP/Contents/MacOS/mila-mcp"
 MILA_CONFIG_URL="https://raw.githubusercontent.com/sonada-io/bootstrap/main/sonada.milaconfig"
 CLAUDE_DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
 CLAUDE="$HOME/.local/bin/claude"
-MILA_CONFIG_DONE="$HOME/Library/Application Support/Sonada/milaconfig-opened"
+SONADA_DIR="$HOME/Library/Application Support/Sonada"
+MILA_CONFIG_FILE="$SONADA_DIR/sonada.milaconfig"
+MILA_CONFIG_DONE="$SONADA_DIR/milaconfig-opened"
 MILA_READY=0
 
 # ---- helpers ----------------------------------------------------------------
@@ -101,6 +106,10 @@ claude_code_sign_in() {
 mila_install() {
   local major url tmp rc=0
   major="$(sw_vers -productVersion | cut -d. -f1)"
+  if [[ -z "$MILA_TEAM_ID" ]]; then
+    warn "MILA_TEAM_ID is empty in bootstrap.sh, so Mila can't be checked and wasn't installed"
+    return 1
+  fi
   if ((major < 14)); then
     warn "Mila needs macOS 14 or later. Update macOS, then run the command again."
     return 1
@@ -123,26 +132,35 @@ mila_install() {
   fi
   if ((rc == 0)); then
     # curl sets no quarantine flag, so Gatekeeper never looks at this app. Check the signature ourselves.
+    # spctl proves Apple notarized it, the Team ID proves it is Mila's own developer.
     if ! codesign --verify --deep --strict "$tmp/Mila.app" || ! spctl --assess --type execute "$tmp/Mila.app"; then
       warn "Mila's download isn't signed and notarized by Apple, so it wasn't installed"
+      rc=1
+    elif [[ "$(codesign -dv "$tmp/Mila.app" 2>&1 | sed -n 's/^TeamIdentifier=//p')" != "$MILA_TEAM_ID" ]]; then
+      warn "Mila's download is signed by an unexpected developer, so it wasn't installed"
       rc=1
     fi
   fi
   if ((rc == 0)); then
-    rm -rf "$MILA_APP"
-    mv "$tmp/Mila.app" "$MILA_APP" || rc=$?
+    # An old or broken Mila is moved aside, not deleted, and comes back if the new one can't be moved in.
+    osascript -e 'quit app "Mila"' >/dev/null 2>&1 || true
+    if [[ -e "$MILA_APP" ]]; then mv "$MILA_APP" "$tmp/Mila.old" || rc=$?; fi
+  fi
+  if ((rc == 0)) && ! mv "$tmp/Mila.app" "$MILA_APP"; then
+    rc=1
+    if [[ -e "$tmp/Mila.old" ]]; then mv "$tmp/Mila.old" "$MILA_APP" || true; fi
   fi
   rm -rf "$tmp"
   return "$rc"
 }
 
-# Mila shows what the file changes and asks before applying it. Opened until it worked once, then never again.
+# Mila shows what the file changes and asks before applying it. Opened until it opened once. The file stays in
+# ~/Library/Application Support/Sonada, so the Set up Mila task can tell the person how to open it again.
 mila_config() {
-  local tmp
-  tmp="$(mktemp -d)"
-  curl -fsSL -o "$tmp/sonada.milaconfig" "$MILA_CONFIG_URL" &&
-    open -a "$MILA_APP" "$tmp/sonada.milaconfig" &&
-    mkdir -p "$(dirname "$MILA_CONFIG_DONE")" && touch "$MILA_CONFIG_DONE"
+  mkdir -p "$SONADA_DIR" &&
+    curl -fsSL -o "$MILA_CONFIG_FILE" "$MILA_CONFIG_URL" &&
+    open -a "$MILA_APP" "$MILA_CONFIG_FILE" &&
+    touch "$MILA_CONFIG_DONE"
 }
 
 # Registers Mila's MCP helper in Claude Desktop, keeping any other servers in the file.
