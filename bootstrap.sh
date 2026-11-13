@@ -52,8 +52,12 @@ try() {
     FAILED+=("$label")
   fi
 }
-# Piped through curl, stdin is the script itself, so anything interactive reads from the terminal.
-tty_run() { "$@" </dev/tty; }
+# Piped through curl, stdin is the script itself, so anything interactive reads from the terminal. It reads from the
+# terminal's own device (/dev/ttys003 and so on), not /dev/tty: macOS can't watch /dev/tty with kqueue, so Claude
+# Code's sign-in crashes on it with "EINVAL: invalid argument, kqueue".
+TTY_DEV="$(ps -o tty= -p $$ 2>/dev/null | tr -d ' ')"
+if [[ -n "$TTY_DEV" && "$TTY_DEV" != "??" && -r "/dev/$TTY_DEV" ]]; then TTY_DEV="/dev/$TTY_DEV"; else TTY_DEV=/dev/tty; fi
+tty_run() { "$@" <"$TTY_DEV"; }
 
 usage() {
   echo "Usage: bootstrap.sh --role rnd|product|ops"
