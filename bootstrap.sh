@@ -27,7 +27,7 @@ DEST="$HOME/sonada-io"
 MILA_REPO="island-io/mila"
 # Apple Team ID that signs Mila's releases. Anything signed by another developer is refused, even when notarized.
 # To read it from an installed Mila: codesign -dv /Applications/Mila.app 2>&1 | grep TeamIdentifier
-MILA_TEAM_ID=""
+MILA_TEAM_ID="38ZC4T8AWY"
 MILA_APP="/Applications/Mila.app"
 MILA_MCP="$MILA_APP/Contents/MacOS/mila-mcp"
 MILA_CONFIG_URL="https://raw.githubusercontent.com/sonada-io/bootstrap/main/sonada.milaconfig"
