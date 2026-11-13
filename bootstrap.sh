@@ -167,9 +167,11 @@ mila_config() {
     touch "$MILA_CONFIG_DONE"
 }
 
-# Registers Mila's MCP helper in Claude Desktop, keeping any other servers in the file.
+# Registers Mila's MCP helper in Claude Desktop, keeping any other servers in the file. Python only edits the file
+# and prints what it did, so the message goes through ok() like every other line.
 mila_desktop() {
-  /usr/bin/python3 - "$CLAUDE_DESKTOP_CONFIG" "$MILA_MCP" <<'PY'
+  local result
+  result="$(/usr/bin/python3 - "$CLAUDE_DESKTOP_CONFIG" "$MILA_MCP" <<'PY'
 import json, os, sys
 
 path, command = sys.argv[1], sys.argv[2]
@@ -179,7 +181,7 @@ if os.path.exists(path):
         config = json.load(f)
 servers = config.setdefault("mcpServers", {})
 if servers.get("mila", {}).get("command") == command:
-    print("    Mila in Claude Desktop: already added")
+    print("already")
     sys.exit(0)
 servers["mila"] = {"command": command}
 os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -187,15 +189,17 @@ with open(path + ".tmp", "w") as f:
     json.dump(config, f, indent=2)
     f.write("\n")
 os.replace(path + ".tmp", path)
-print("    added Mila to Claude Desktop")
+print("added")
 PY
+  )" || return 1
+  if [[ "$result" == "already" ]]; then ok "Mila in Claude Desktop: already added"; else ok "added Mila to Claude Desktop"; fi
 }
 
 mila_code() {
   if "$CLAUDE" mcp get mila >/dev/null 2>&1; then
     ok "Mila in Claude Code: already added"
   else
-    "$CLAUDE" mcp add --scope user mila -- "$MILA_MCP"
+    "$CLAUDE" mcp add --scope user mila -- "$MILA_MCP" >/dev/null && ok "added Mila to Claude Code"
   fi
 }
 
