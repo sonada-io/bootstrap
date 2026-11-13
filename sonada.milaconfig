@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "remoteTranscription": { "enabled": false },
+  "recordingLanguage": "he",
+  "liveAI": { "enabled": true },
+  "diarization": { "enabled": true },
+  "meetingDetection": { "enabled": true }
+}
