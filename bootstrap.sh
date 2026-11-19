@@ -557,8 +557,16 @@ main() {
     return
   fi
   login="$(gh api user --jq .login 2>/dev/null || true)"
-  if [[ -n "$login" && "$login" != *-sonada ]]; then
-    warn "Signed in to GitHub as $login. Sonada accounts are named <first name>-sonada. Ask in #onboarding if that's wrong."
+  # A wrong account stops here, before the SSH key goes to it and git takes its name and email.
+  if [[ "$login" != *-sonada ]]; then
+    warn "Signed in to GitHub as ${login:-an unknown account}, but Sonada accounts are named <first name>-sonada"
+    warn "(or <first name>-<last name>-sonada). Git, SSH and cloning are skipped. To fix it:"
+    warn "- Your new Sonada account has the wrong name: rename it in GitHub, Settings, Account, Change username."
+    warn "- You signed in with a personal account: run  gh auth logout --hostname github.com"
+    warn "Then run this command again. Stuck? Ask in #onboarding."
+    FAILED+=("GitHub account name")
+    summary
+    return
   fi
   # A new hire's org invite is still pending here. Accept it if GitHub matched it to this account.
   if [[ "$(gh api "user/memberships/orgs/$ORG" --jq .state 2>/dev/null || true)" == "pending" ]]; then
