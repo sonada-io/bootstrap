@@ -1,0 +1,19 @@
+# Sonada's shared git settings. bootstrap.sh copies this file to ~/.config/sonada/gitconfig on every run and
+# includes it at the top of ~/.gitconfig, so anything you set yourself in ~/.gitconfig wins.
+# Your name, email and commit signing live in ~/.gitconfig, not here: the script turns signing on there only after
+# your SSH key is on GitHub, so a failed step never leaves git unable to commit.
+[alias]
+	st = status
+	co = checkout
+	br = branch
+	cm = commit
+	lg = log --graph --pretty=format:'%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset' --abbrev-commit
+	unstage = reset HEAD --
+	last = log -1 HEAD
+[push]
+	default = current
+	autoSetupRemote = true
+[pull]
+	rebase = true
+[init]
+	defaultBranch = main

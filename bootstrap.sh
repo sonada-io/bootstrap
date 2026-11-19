@@ -3,8 +3,9 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/sonada-io/bootstrap/main/bootstrap.sh | bash -s -- --role rnd
 #
-# --role is rnd, product or ops. Everyone gets the apps, Claude Code and Mila. R&D also gets the developer tools,
-# GitHub and the repos. Edit the lists below to change what a new laptop gets.
+# --role is rnd, product or ops. Everyone gets oh my zsh, the apps, Claude Code and Mila. R&D and Product also get
+# git, GitHub, Sonada's git settings and an SSH key. R&D also gets the developer tools and the repos. Edit the lists
+# below to change what a new laptop gets.
 set -euo pipefail
 
 # ---- what gets installed ----------------------------------------------------
@@ -19,6 +20,10 @@ APPS=(
 RND_APPS=("docker-desktop:Docker")
 TAPS=(hashicorp/tap)
 FORMULAE=(git gh uv node awscli hashicorp/tap/terraform python@3.15)
+CLI_CASKS=(gcloud-cli) # command line tools that brew ships as casks (no app in /Applications)
+GIT_FORMULAE=(git gh)  # Product gets only these
+OMZ_PLUGINS="git gh"
+RND_OMZ_PLUGINS="git gh aws gcloud"
 NPM_VERSION="11.19"
 ORG="sonada-io"
 REPOS=(demo skills)
@@ -37,6 +42,18 @@ SONADA_DIR="$HOME/Library/Application Support/Sonada"
 MILA_CONFIG_FILE="$SONADA_DIR/sonada.milaconfig"
 MILA_CONFIG_DONE="$SONADA_DIR/milaconfig-opened"
 MILA_READY=0
+
+OMZ_INSTALL_URL="https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh"
+# Sonada's shared git settings (aliases, push, pull, signing). Fetched on every run, so a change to the file reaches
+# everyone the next time they run the script. Included at the top of ~/.gitconfig, so the person's own settings win.
+GITCONFIG_URL="https://raw.githubusercontent.com/sonada-io/bootstrap/main/sonada.gitconfig"
+SONADA_GITCONFIG="$HOME/.config/sonada/gitconfig"
+# shellcheck disable=SC2088 # written into ~/.gitconfig as is, git expands the ~
+SONADA_GITCONFIG_INCLUDE="~/.config/sonada/gitconfig"
+# A Sonada-specific name, so it never replaces a personal ~/.ssh/id_ed25519.
+SSH_KEY="$HOME/.ssh/id_ed25519_sonada"
+# Extra GitHub scopes: upload the SSH key for sign-in and for signing, and read the Sonada email for git.
+GH_SCOPES=(admin:public_key admin:ssh_signing_key user:email)
 
 # ---- helpers ----------------------------------------------------------------
 say() { printf '\n\033[1;34m==> %s\033[0m\n' "$*"; }
@@ -203,6 +220,212 @@ mila_code() {
   fi
 }
 
+install_formulae() {
+  local formula
+  for formula in "$@"; do
+    if brew list --formula "${formula##*/}" >/dev/null 2>&1; then
+      ok "${formula##*/}: already installed"
+    else
+      try "${formula##*/}" brew install "$formula"
+    fi
+  done
+}
+
+install_cli_casks() {
+  local cask
+  for cask in "$@"; do
+    if brew list --cask "$cask" >/dev/null 2>&1; then
+      ok "$cask: already installed"
+    else
+      try "$cask" brew install --cask "$cask"
+    fi
+  done
+}
+
+# The official installer, downloaded first so a failed download runs nothing. Unattended: it doesn't change the login
+# shell (zsh is already the macOS default) and doesn't start a new shell. An existing ~/.zshrc is kept as
+# ~/.zshrc.pre-oh-my-zsh. Homebrew and ~/.local/bin are in ~/.zprofile, so they keep working.
+oh_my_zsh_install() {
+  local plugins="$1" tmp rc=0 had_zshrc=0
+  if [[ -s "$HOME/.zshrc" ]]; then had_zshrc=1; fi
+  tmp="$(mktemp -d)"
+  curl -fsSL -o "$tmp/install.sh" "$OMZ_INSTALL_URL" || rc=$?
+  # ZSH is cleared: a terminal already running oh my zsh exports it, and the installer then refuses to run.
+  if ((rc == 0)); then env -u ZSH RUNZSH=no CHSH=no sh "$tmp/install.sh" --unattended || rc=$?; fi
+  rm -rf "$tmp"
+  ((rc == 0)) || return "$rc"
+  # Only the installer's own default line is changed, so a hand-edited ~/.zshrc is left alone.
+  sed -i '' "s/^plugins=(git)\$/plugins=($plugins)/" "$HOME/.zshrc" && ok "plugins: $plugins"
+  # The installer moved the person's own ~/.zshrc aside. Load it after oh my zsh, so their PATH, aliases and tools
+  # (nvm, pyenv, ...) keep working.
+  if ((had_zshrc)) && [[ -f "$HOME/.zshrc.pre-oh-my-zsh" ]]; then
+    # shellcheck disable=SC2016 # written as is, expanded when zsh starts
+    printf '\n# Your settings from before oh my zsh\n[[ -f ~/.zshrc.pre-oh-my-zsh ]] && source ~/.zshrc.pre-oh-my-zsh\n' \
+      >>"$HOME/.zshrc" && ok "kept your previous ~/.zshrc (loaded from ~/.zshrc.pre-oh-my-zsh)"
+  fi
+}
+
+# True when the GitHub token has every scope in GH_SCOPES. A token from before this script asked for them doesn't.
+gh_has_scopes() {
+  local have scope
+  have="$(gh api -i user 2>/dev/null | tr -d '\r' | sed -n 's/^[Xx]-[Oo][Aa]uth-[Ss]copes: //p')"
+  for scope in "${GH_SCOPES[@]}"; do
+    [[ ", $have," == *", $scope,"* ]] || return 1
+  done
+}
+
+github_sign_in() {
+  local scopes
+  scopes="$(IFS=,; echo "${GH_SCOPES[*]}")"
+  if gh auth status >/dev/null 2>&1; then
+    if gh_has_scopes; then
+      ok "already signed in"
+    else
+      echo "GitHub needs a few more permissions, for your SSH key and your email. A browser opens."
+      tty_run gh auth refresh --hostname github.com --scopes "$scopes" || return 1
+    fi
+  else
+    echo "Sign in with the GitHub account you created from the $ORG invite (<first name>-sonada). A browser opens."
+    # --skip-ssh-key: the script makes its own key (id_ed25519_sonada) below, so gh mustn't offer another one.
+    tty_run gh auth login --hostname github.com --git-protocol https --skip-ssh-key --web --scopes "$scopes" ||
+      return 1
+  fi
+  gh auth status >/dev/null 2>&1
+}
+
+# Downloads Sonada's git settings and includes them at the top of ~/.gitconfig, once. Written with cat >, not mv, so a
+# ~/.gitconfig that is a symlink (a dotfiles repo) stays one.
+sonada_gitconfig() {
+  local tmp
+  mkdir -p "$(dirname "$SONADA_GITCONFIG")" || return 1
+  curl -fsSL -o "$SONADA_GITCONFIG.tmp" "$GITCONFIG_URL" || return 1
+  mv "$SONADA_GITCONFIG.tmp" "$SONADA_GITCONFIG" || return 1
+  if git config --global --get-all include.path 2>/dev/null | grep -qxF "$SONADA_GITCONFIG_INCLUDE"; then
+    ok "Sonada git settings: updated"
+    return 0
+  fi
+  tmp="$(mktemp)"
+  { printf '[include]\n\tpath = %s\n' "$SONADA_GITCONFIG_INCLUDE"; cat "$HOME/.gitconfig" 2>/dev/null || true; } >"$tmp" &&
+    cat "$tmp" >"$HOME/.gitconfig" && rm -f "$tmp" && ok "added Sonada git settings to ~/.gitconfig"
+}
+
+# Name and email for commits, and the key that signs them. Values already set are left alone.
+git_identity() {
+  local name email
+  name="$(git config --global user.name || true)"
+  if [[ -n "$name" ]]; then
+    ok "git name: $name"
+  else
+    # gh prints an API error to stdout, so a failed call must count as no value.
+    name="$(gh api user --jq '.name // empty' 2>/dev/null)" || name=""
+    if [[ -z "$name" ]]; then
+      printf '    Your full name for git commits (First Last): '
+      read -r name <"$TTY_DEV" || true
+    fi
+    [[ -n "$name" ]] || { warn "no name given"; return 1; }
+    git config --global user.name "$name" && ok "git name: $name"
+  fi
+
+  email="$(git config --global user.email || true)"
+  if [[ -n "$email" ]]; then
+    ok "git email: $email"
+  else
+    email="$(gh api user/emails --jq '[.[] | select(.verified and (.email | endswith("@sonada.io")))][0].email // empty' \
+      2>/dev/null)" || email=""
+    if [[ -z "$email" ]]; then
+      warn "Your GitHub account has no verified @sonada.io email. Add it in GitHub, Settings, Emails, then run again."
+      return 1
+    fi
+    git config --global user.email "$email" && ok "git email: $email"
+  fi
+}
+
+# An ed25519 key with a passphrase kept in the macOS Keychain, used for GitHub sign-in and for signing commits.
+ssh_key() {
+  local email pub title type existing out
+  mkdir -p "$HOME/.ssh" && chmod 700 "$HOME/.ssh" || return 1
+  if [[ -f "$SSH_KEY" ]]; then
+    ok "SSH key: already there"
+  else
+    email="$(git config --global user.email || true)"
+    echo "Choose a passphrase for your new SSH key. Your Mac's Keychain remembers it, so you type it only now."
+    tty_run ssh-keygen -q -t ed25519 -C "${email:-sonada}" -f "$SSH_KEY" || return 1
+    ok "created $SSH_KEY"
+  fi
+  tty_run ssh-add -q --apple-use-keychain "$SSH_KEY" || return 1
+
+  if ! grep -qsiE '^[[:space:]]*host[[:space:]]+(.*[[:space:]])?github\.com([[:space:]]|$)' "$HOME/.ssh/config"; then
+    printf '\nHost github.com\n  AddKeysToAgent yes\n  UseKeychain yes\n  IdentitiesOnly yes\n  IdentityFile %s\n' \
+      "$SSH_KEY" >>"$HOME/.ssh/config" && chmod 600 "$HOME/.ssh/config" && ok "added github.com to ~/.ssh/config"
+  fi
+
+  # GitHub's host keys, read from its API over HTTPS, so the first SSH connection has nothing to trust blindly.
+  touch "$HOME/.ssh/known_hosts"
+  while read -r key; do
+    [[ -n "$key" ]] || continue
+    grep -qxF "github.com $key" "$HOME/.ssh/known_hosts" || echo "github.com $key" >>"$HOME/.ssh/known_hosts"
+  done < <(gh api meta --jq '.ssh_keys[]')
+
+  pub="$(cut -d' ' -f1,2 "$SSH_KEY.pub")"
+  title="Sonada $(scutil --get ComputerName 2>/dev/null || hostname -s)"
+  for type in authentication signing; do
+    if [[ "$type" == authentication ]]; then
+      existing="$(gh api user/keys --paginate --jq '.[].key')" || return 1
+    else
+      existing="$(gh api user/ssh_signing_keys --paginate --jq '.[].key')" || return 1
+    fi
+    if grep -qxF "$pub" <<<"$existing"; then
+      ok "SSH key on GitHub ($type): already added"
+    else
+      gh ssh-key add "$SSH_KEY.pub" --type "$type" --title "$title" >/dev/null || return 1
+      ok "added the SSH key to GitHub ($type)"
+    fi
+  done
+
+  # Signing is turned on only now that the key exists and GitHub knows it as a signing key. A signing key of the
+  # person's own (GPG or another SSH key) is left alone, and so is its format.
+  existing="$(git config --global user.signingkey || true)"
+  if [[ -n "$existing" && "$existing" != "$SSH_KEY.pub" ]]; then
+    ok "git signing: keeping your own key ($existing)"
+  else
+    git config --global gpg.format ssh &&
+      git config --global user.signingkey "$SSH_KEY.pub" &&
+      git config --global commit.gpgsign true &&
+      git config --global tag.gpgsign true || return 1
+    ok "git signs commits and tags with $SSH_KEY.pub"
+  fi
+}
+
+# Git over SSH only once it is proven to reach GitHub as the signed-in account. Otherwise gh and git stay on HTTPS,
+# which gh's credential helper already handles (a network that blocks port 22, a personal key in ~/.ssh/config).
+ssh_github() {
+  local out
+  # GitHub answers a working key with "Hi <login>!" and exit code 1, since it gives no shell.
+  out="$(ssh -T -o BatchMode=yes git@github.com 2>&1 || true)"
+  if [[ "$out" == *"Hi ${login:-}!"* ]]; then
+    gh config set --host github.com git_protocol ssh || return 1
+    ok "SSH to GitHub works as $login"
+  elif [[ "$out" == *"successfully authenticated"* ]]; then
+    warn "SSH reaches GitHub as another account ($out). Check the github.com entry in ~/.ssh/config. Staying on HTTPS."
+    return 1
+  else
+    warn "SSH to GitHub didn't work ($out). Staying on HTTPS."
+    return 1
+  fi
+}
+
+# Repos cloned over HTTPS before this script set up SSH move to SSH.
+remotes_to_ssh() {
+  local dir url
+  for dir in "$DEST"/*/; do
+    [[ -d "$dir.git" ]] || continue
+    url="$(git -C "$dir" remote get-url origin 2>/dev/null || true)"
+    if [[ "$url" =~ ^https://github\.com/(.+)$ ]]; then
+      git -C "$dir" remote set-url origin "git@github.com:${BASH_REMATCH[1]}" && ok "$(basename "$dir"): origin uses SSH"
+    fi
+  done
+}
+
 # Everything runs inside main(), called on the last line. Bash then reads the whole file before running any of it,
 # so a cut-off download runs nothing, and a program that reads standard input can't swallow the rest of the script.
 main() {
@@ -241,6 +464,16 @@ main() {
   if ! grep -qs 'brew shellenv' "$HOME/.zprofile"; then
     echo "eval \"\$($BREW shellenv)\"" >>"$HOME/.zprofile"
     ok "added Homebrew to ~/.zprofile"
+  fi
+
+  # ---- 2b. oh my zsh -----------------------------------------------------------
+  say "oh my zsh"
+  if [[ -d "$HOME/.oh-my-zsh" || (-n "${ZSH:-}" && -f "$ZSH/oh-my-zsh.sh") ]]; then
+    ok "already installed"
+  elif [[ "$ROLE" == "rnd" ]]; then
+    try "oh my zsh" oh_my_zsh_install "$RND_OMZ_PLUGINS"
+  else
+    try "oh my zsh" oh_my_zsh_install "$OMZ_PLUGINS"
   fi
 
   # ---- 3. Apps -----------------------------------------------------------------
@@ -290,54 +523,79 @@ main() {
     if [[ -x "$CLAUDE" ]]; then try "Mila in Claude Code" mila_code; fi
   fi
 
+  if [[ "$ROLE" == "ops" ]]; then
+    summary
+    return
+  fi
+
+  # ---- 6. Developer tools (R&D) or git tools (Product) -------------------------
+  if [[ "$ROLE" == "rnd" ]]; then
+    say "Developer tools"
+    for tap in "${TAPS[@]}"; do try "tap $tap" brew tap "$tap"; done
+    install_formulae "${FORMULAE[@]}"
+    install_cli_casks "${CLI_CASKS[@]}"
+    if command -v npm >/dev/null && [[ "$(npm --version)" != "$NPM_VERSION".* ]]; then
+      try "npm $NPM_VERSION" npm install --global "npm@$NPM_VERSION"
+    fi
+  else
+    say "Git tools"
+    install_formulae "${GIT_FORMULAE[@]}"
+  fi
+
+  # ---- 7. GitHub (R&D, Product) ------------------------------------------------
+  say "GitHub"
+  if ! command -v gh >/dev/null; then
+    warn "gh isn't installed, so GitHub, git and SSH setup are skipped."
+    FAILED+=("GitHub sign-in")
+    summary
+    return
+  fi
+  if ! github_sign_in; then
+    warn "GitHub sign-in didn't finish, so git, SSH and cloning are skipped."
+    FAILED+=("GitHub sign-in")
+    summary
+    return
+  fi
+  login="$(gh api user --jq .login 2>/dev/null || true)"
+  # A wrong account stops here, before the SSH key goes to it and git takes its name and email.
+  if [[ "$login" != *-sonada ]]; then
+    warn "Signed in to GitHub as ${login:-an unknown account}, but Sonada accounts are named <first name>-sonada"
+    warn "(or <first name>-<last name>-sonada). Git, SSH and cloning are skipped. To fix it:"
+    warn "- Your new Sonada account has the wrong name: rename it in GitHub, Settings, Account, Change username."
+    warn "- You signed in with a personal account: run  gh auth logout --hostname github.com"
+    warn "Then run this command again. Stuck? Ask in #onboarding."
+    FAILED+=("GitHub account name")
+    summary
+    return
+  fi
+  # A new hire's org invite is still pending here. Accept it if GitHub matched it to this account.
+  if [[ "$(gh api "user/memberships/orgs/$ORG" --jq .state 2>/dev/null || true)" == "pending" ]]; then
+    gh api --method PATCH "user/memberships/orgs/$ORG" -f state=active >/dev/null && ok "accepted the $ORG invite"
+  fi
+  try "git credentials for GitHub" gh auth setup-git
+
+  # ---- 8. Git and SSH (R&D, Product) -------------------------------------------
+  say "Git and SSH"
+  try "Sonada git settings" sonada_gitconfig
+  try "git name and email" git_identity
+  ssh_ok=0
+  if ssh_key; then
+    if ssh_github; then ssh_ok=1; else FAILED+=("Git over SSH"); fi
+  else
+    warn "SSH key failed, continuing"
+    FAILED+=("SSH key")
+  fi
+  if ((!ssh_ok)); then try "git over HTTPS" gh config set --host github.com git_protocol https; fi
+
   if [[ "$ROLE" != "rnd" ]]; then
     summary
     return
   fi
 
-  # ---- 6. Developer tools (R&D) ------------------------------------------------
-  say "Developer tools"
-  for tap in "${TAPS[@]}"; do try "tap $tap" brew tap "$tap"; done
-  for formula in "${FORMULAE[@]}"; do
-    if brew list --formula "${formula##*/}" >/dev/null 2>&1; then
-      ok "${formula##*/}: already installed"
-    else
-      try "${formula##*/}" brew install "$formula"
-    fi
-  done
-
-  if command -v npm >/dev/null && [[ "$(npm --version)" != "$NPM_VERSION".* ]]; then
-    try "npm $NPM_VERSION" npm install --global "npm@$NPM_VERSION"
-  fi
-
-  # ---- 7. GitHub (R&D) ---------------------------------------------------------
-  say "GitHub"
-  if ! command -v gh >/dev/null; then
-    warn "gh isn't installed, so GitHub sign-in and cloning are skipped."
-    FAILED+=("GitHub sign-in")
-    summary
-    return
-  fi
-  if gh auth status >/dev/null 2>&1; then
-    ok "already signed in"
-  else
-    echo "Sign in with your GitHub account (the one invited to $ORG). A browser opens."
-    if ! tty_run gh auth login --hostname github.com --git-protocol https --web || ! gh auth status >/dev/null 2>&1; then
-      warn "GitHub sign-in didn't finish, so cloning is skipped."
-      FAILED+=("GitHub sign-in")
-      summary
-      return
-    fi
-  fi
-  try "git credentials for GitHub" gh auth setup-git
-
-  # ---- 8. Repos (R&D) ----------------------------------------------------------
+  # ---- 9. Repos (R&D) ----------------------------------------------------------
   say "Repos in $DEST"
-  # A new hire's org invite is still pending here. Accept it if GitHub matched it to this account.
-  if [[ "$(gh api "user/memberships/orgs/$ORG" --jq .state 2>/dev/null || true)" == "pending" ]]; then
-    gh api --method PATCH "user/memberships/orgs/$ORG" -f state=active >/dev/null && ok "accepted the $ORG invite"
-  fi
   mkdir -p "$DEST"
+  if ((ssh_ok)); then remotes_to_ssh; fi
   NOT_YET=()
   for repo in "${REPOS[@]}"; do
     if [[ -d "$DEST/$repo/.git" ]]; then
