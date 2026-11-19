@@ -246,7 +246,8 @@ install_cli_casks() {
 # shell (zsh is already the macOS default) and doesn't start a new shell. An existing ~/.zshrc is kept as
 # ~/.zshrc.pre-oh-my-zsh. Homebrew and ~/.local/bin are in ~/.zprofile, so they keep working.
 oh_my_zsh_install() {
-  local plugins="$1" tmp rc=0
+  local plugins="$1" tmp rc=0 had_zshrc=0
+  if [[ -s "$HOME/.zshrc" ]]; then had_zshrc=1; fi
   tmp="$(mktemp -d)"
   curl -fsSL -o "$tmp/install.sh" "$OMZ_INSTALL_URL" || rc=$?
   # ZSH is cleared: a terminal already running oh my zsh exports it, and the installer then refuses to run.
@@ -255,6 +256,13 @@ oh_my_zsh_install() {
   ((rc == 0)) || return "$rc"
   # Only the installer's own default line is changed, so a hand-edited ~/.zshrc is left alone.
   sed -i '' "s/^plugins=(git)\$/plugins=($plugins)/" "$HOME/.zshrc" && ok "plugins: $plugins"
+  # The installer moved the person's own ~/.zshrc aside. Load it after oh my zsh, so their PATH, aliases and tools
+  # (nvm, pyenv, ...) keep working.
+  if ((had_zshrc)) && [[ -f "$HOME/.zshrc.pre-oh-my-zsh" ]]; then
+    # shellcheck disable=SC2016 # written as is, expanded when zsh starts
+    printf '\n# Your settings from before oh my zsh\n[[ -f ~/.zshrc.pre-oh-my-zsh ]] && source ~/.zshrc.pre-oh-my-zsh\n' \
+      >>"$HOME/.zshrc" && ok "kept your previous ~/.zshrc (loaded from ~/.zshrc.pre-oh-my-zsh)"
+  fi
 }
 
 # True when the GitHub token has every scope in GH_SCOPES. A token from before this script asked for them doesn't.
@@ -278,7 +286,9 @@ github_sign_in() {
     fi
   else
     echo "Sign in with the GitHub account you created from the $ORG invite (<first name>-sonada). A browser opens."
-    tty_run gh auth login --hostname github.com --git-protocol ssh --web --scopes "$scopes" || return 1
+    # --skip-ssh-key: the script makes its own key (id_ed25519_sonada) below, so gh mustn't offer another one.
+    tty_run gh auth login --hostname github.com --git-protocol https --skip-ssh-key --web --scopes "$scopes" ||
+      return 1
   fi
   gh auth status >/dev/null 2>&1
 }
@@ -328,10 +338,6 @@ git_identity() {
     fi
     git config --global user.email "$email" && ok "git email: $email"
   fi
-
-  if [[ -z "$(git config --global user.signingkey || true)" ]]; then
-    git config --global user.signingkey "$SSH_KEY.pub" && ok "git signs commits with $SSH_KEY.pub"
-  fi
 }
 
 # An ed25519 key with a passphrase kept in the macOS Keychain, used for GitHub sign-in and for signing commits.
@@ -376,13 +382,34 @@ ssh_key() {
     fi
   done
 
-  gh config set --host github.com git_protocol ssh || return 1
-  # GitHub answers a working key with "successfully authenticated" and exit code 1, since it gives no shell.
-  out="$(ssh -T -o BatchMode=yes git@github.com 2>&1 || true)"
-  if [[ "$out" == *"successfully authenticated"* ]]; then
-    ok "SSH to GitHub works"
+  # Signing is turned on only now that the key exists and GitHub knows it as a signing key. A signing key of the
+  # person's own (GPG or another SSH key) is left alone, and so is its format.
+  existing="$(git config --global user.signingkey || true)"
+  if [[ -n "$existing" && "$existing" != "$SSH_KEY.pub" ]]; then
+    ok "git signing: keeping your own key ($existing)"
   else
-    warn "SSH to GitHub didn't work: $out"
+    git config --global gpg.format ssh &&
+      git config --global user.signingkey "$SSH_KEY.pub" &&
+      git config --global commit.gpgsign true &&
+      git config --global tag.gpgsign true || return 1
+    ok "git signs commits and tags with $SSH_KEY.pub"
+  fi
+}
+
+# Git over SSH only once it is proven to reach GitHub as the signed-in account. Otherwise gh and git stay on HTTPS,
+# which gh's credential helper already handles (a network that blocks port 22, a personal key in ~/.ssh/config).
+ssh_github() {
+  local out
+  # GitHub answers a working key with "Hi <login>!" and exit code 1, since it gives no shell.
+  out="$(ssh -T -o BatchMode=yes git@github.com 2>&1 || true)"
+  if [[ "$out" == *"Hi ${login:-}!"* ]]; then
+    gh config set --host github.com git_protocol ssh || return 1
+    ok "SSH to GitHub works as $login"
+  elif [[ "$out" == *"successfully authenticated"* ]]; then
+    warn "SSH reaches GitHub as another account ($out). Check the github.com entry in ~/.ssh/config. Staying on HTTPS."
+    return 1
+  else
+    warn "SSH to GitHub didn't work ($out). Staying on HTTPS."
     return 1
   fi
 }
@@ -543,7 +570,14 @@ main() {
   say "Git and SSH"
   try "Sonada git settings" sonada_gitconfig
   try "git name and email" git_identity
-  try "SSH key" ssh_key
+  ssh_ok=0
+  if ssh_key; then
+    if ssh_github; then ssh_ok=1; else FAILED+=("Git over SSH"); fi
+  else
+    warn "SSH key failed, continuing"
+    FAILED+=("SSH key")
+  fi
+  if ((!ssh_ok)); then try "git over HTTPS" gh config set --host github.com git_protocol https; fi
 
   if [[ "$ROLE" != "rnd" ]]; then
     summary
@@ -553,7 +587,7 @@ main() {
   # ---- 9. Repos (R&D) ----------------------------------------------------------
   say "Repos in $DEST"
   mkdir -p "$DEST"
-  remotes_to_ssh
+  if ((ssh_ok)); then remotes_to_ssh; fi
   NOT_YET=()
   for repo in "${REPOS[@]}"; do
     if [[ -d "$DEST/$repo/.git" ]]; then
