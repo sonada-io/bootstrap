@@ -16,8 +16,14 @@ APPS=(
   "chatgpt:ChatGPT"
   "slack:Slack"
   "notion:Notion"
+  "1password:1Password"
 )
 RND_APPS=("docker-desktop:Docker")
+# Chrome extensions, by Web Store ID. Chrome adds them at its next start and asks once to enable each.
+CHROME_EXTENSIONS=(
+  "aeblfdkhhhdcdjpifhhbdiojplfjncoa:1Password"
+)
+CHROME_EXTERNAL_DIR="$HOME/Library/Application Support/Google/Chrome/External Extensions"
 TAPS=(hashicorp/tap)
 FORMULAE=(git gh uv node awscli hashicorp/tap/terraform python@3.15)
 CLI_CASKS=(gcloud-cli) # command line tools that brew ships as casks (no app in /Applications)
@@ -91,7 +97,7 @@ summary() {
   fi
   local n=1
   echo "    Next:"
-  echo "    $((n++)). Open Chrome and sign in with your Sonada account."
+  echo "    $((n++)). Quit Chrome if it is open (Cmd+Q), open it again and sign in with your Sonada account. When Chrome says 1Password was added, click Enable."
   if ((MILA_READY)); then echo "    $((n++)). Quit Claude and open it again, so it loads Mila."; fi
   if [[ "$ROLE" == "rnd" ]]; then echo "    $((n++)). Open Docker once and accept its terms."; fi
   echo "    $((n++)). Go back to the welcome email and continue with the next step."
@@ -107,6 +113,25 @@ install_apps() {
       ok "$app: already installed"
     else
       try "$app" brew install --cask "$cask"
+    fi
+  done
+}
+
+# Chrome's external extensions: a file named <id>.json makes Chrome install that extension from the Web Store. Chrome
+# never installs one silently, so the person clicks Enable. Chrome reads the folder only when it starts, so a Chrome left
+# open needs a restart first.
+chrome_extensions() {
+  local entry id name file
+  mkdir -p "$CHROME_EXTERNAL_DIR" || return 1
+  for entry in "$@"; do
+    id="${entry%%:*}"
+    name="${entry#*:}"
+    file="$CHROME_EXTERNAL_DIR/$id.json"
+    if [[ -f "$file" ]]; then
+      ok "$name extension: already added"
+    else
+      echo '{"external_update_url": "https://clients2.google.com/service/update2/crx"}' >"$file" || return 1
+      ok "$name extension: added to Chrome"
     fi
   done
 }
@@ -480,6 +505,7 @@ main() {
   say "Apps"
   install_apps "${APPS[@]}"
   if [[ "$ROLE" == "rnd" ]]; then install_apps "${RND_APPS[@]}"; fi
+  try "Chrome extensions" chrome_extensions "${CHROME_EXTENSIONS[@]}"
 
   # ---- 4. Claude Code ----------------------------------------------------------
   say "Claude Code"
