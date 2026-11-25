@@ -16,6 +16,7 @@ APPS=(
   "chatgpt:ChatGPT"
   "slack:Slack"
   "notion:Notion"
+  "1password:1Password"
 )
 RND_APPS=("docker-desktop:Docker")
 TAPS=(hashicorp/tap)

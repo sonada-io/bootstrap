@@ -10,7 +10,7 @@ Everyone gets:
 
 - the Xcode command line tools and Homebrew
 - [oh my zsh](https://ohmyz.sh), with the `git` and `gh` plugins (an existing `~/.zshrc` moves to `~/.zshrc.pre-oh-my-zsh` and the new one loads it, so your own settings keep working)
-- the Chrome, Claude, ChatGPT, Slack and Notion apps
+- the Chrome, Claude, ChatGPT, Slack, Notion and 1Password apps
 - Claude Code, and a Claude sign-in
 - [Mila](https://github.com/island-io/mila) (macOS 14 or later), with Sonada's settings from `sonada.milaconfig` (Mila shows the changes and asks before applying them) and its MCP server added to Claude Desktop and Claude Code
 
