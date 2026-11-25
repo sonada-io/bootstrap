@@ -97,7 +97,7 @@ summary() {
   fi
   local n=1
   echo "    Next:"
-  echo "    $((n++)). Open Chrome and sign in with your Sonada account. When Chrome says 1Password was added, click Enable."
+  echo "    $((n++)). Quit Chrome if it is open (Cmd+Q), open it again and sign in with your Sonada account. When Chrome says 1Password was added, click Enable."
   if ((MILA_READY)); then echo "    $((n++)). Quit Claude and open it again, so it loads Mila."; fi
   if [[ "$ROLE" == "rnd" ]]; then echo "    $((n++)). Open Docker once and accept its terms."; fi
   echo "    $((n++)). Go back to the welcome email and continue with the next step."
@@ -118,10 +118,11 @@ install_apps() {
 }
 
 # Chrome's external extensions: a file named <id>.json makes Chrome install that extension from the Web Store. Chrome
-# never installs one silently, so the person clicks Enable the first time Chrome opens after this.
+# never installs one silently, so the person clicks Enable. Chrome reads the folder only when it starts, so a Chrome left
+# open needs a restart first.
 chrome_extensions() {
   local entry id name file
-  mkdir -p "$CHROME_EXTERNAL_DIR"
+  mkdir -p "$CHROME_EXTERNAL_DIR" || return 1
   for entry in "$@"; do
     id="${entry%%:*}"
     name="${entry#*:}"
@@ -129,7 +130,7 @@ chrome_extensions() {
     if [[ -f "$file" ]]; then
       ok "$name extension: already added"
     else
-      echo '{"external_update_url": "https://clients2.google.com/service/update2/crx"}' >"$file"
+      echo '{"external_update_url": "https://clients2.google.com/service/update2/crx"}' >"$file" || return 1
       ok "$name extension: added to Chrome"
     fi
   done
