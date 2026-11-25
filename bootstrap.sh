@@ -3,6 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/sonada-io/bootstrap/main/bootstrap.sh | bash -s -- --role rnd
 #
+# R&D's command, in their Setup Task, also has --aws-dev-account and --aws-backoffice-account (see AWS_CONFIG).
+#
 # --role is rnd, product or ops. Everyone gets oh my zsh, the apps, Claude Code and Mila. R&D and Product also get
 # git, GitHub, Sonada's git settings and an SSH key. R&D also gets the developer tools and the repos. Edit the lists
 # below to change what a new laptop gets.
@@ -34,6 +36,15 @@ NPM_VERSION="11.19"
 ORG="sonada-io"
 REPOS=(demo skills)
 DEST="$HOME/sonada-io"
+
+# AWS CLI profiles for R&D: sign-in through IAM Identity Center, then `aws sso login --profile sonada-dev-power`.
+# Only the roles the Engineers group has (ops/identity). This repo is public, so the account IDs aren't here: they come
+# in the command from the hire's Setup Task (--aws-dev-account, --aws-backoffice-account). Without them, no profiles.
+AWS_CONFIG="$HOME/.aws/config"
+AWS_PORTAL="https://d-9066649453.awsapps.com/start"
+AWS_DEV_ACCOUNT=""
+AWS_BACKOFFICE_ACCOUNT=""
+AWS_READY=0
 
 MILA_REPO="island-io/mila"
 # Apple Team ID that signs Mila's releases. Anything signed by another developer is refused, even when notarized.
@@ -83,7 +94,7 @@ if [[ -n "$TTY_DEV" && "$TTY_DEV" != "??" && -r "/dev/$TTY_DEV" ]]; then TTY_DEV
 tty_run() { "$@" <"$TTY_DEV"; }
 
 usage() {
-  echo "Usage: bootstrap.sh --role rnd|product|ops"
+  echo "Usage: bootstrap.sh --role rnd|product|ops [--aws-dev-account ID --aws-backoffice-account ID]"
   echo "Copy the command from your welcome email: it has your role."
 }
 
@@ -99,7 +110,12 @@ summary() {
   echo "    Next:"
   echo "    $((n++)). Quit Chrome if it is open (Cmd+Q), open it again and sign in with your Sonada account. When Chrome says 1Password was added, click Enable."
   if ((MILA_READY)); then echo "    $((n++)). Quit Claude and open it again, so it loads Mila."; fi
-  if [[ "$ROLE" == "rnd" ]]; then echo "    $((n++)). Open Docker once and accept its terms."; fi
+  if [[ "$ROLE" == "rnd" ]]; then
+    echo "    $((n++)). Open Docker once and accept its terms."
+    if ((AWS_READY)); then
+      echo "    $((n++)). Once you have AWS access (Sign in to AWS in your onboarding): aws sso login --profile sonada-dev-power"
+    fi
+  fi
   echo "    $((n++)). Go back to the welcome email and continue with the next step."
   ((${#FAILED[@]} == 0))
 }
@@ -134,6 +150,37 @@ chrome_extensions() {
       ok "$name extension: added to Chrome"
     fi
   done
+}
+
+# Adds the Sonada SSO session and profiles to ~/.aws/config. A block already there (same header) is left as it is, and
+# nothing else in the file changes.
+aws_profiles() {
+  local entry name account role added=0
+  local missing=()
+  if [[ -z "$AWS_DEV_ACCOUNT" ]]; then missing+=(--aws-dev-account); fi
+  if [[ -z "$AWS_BACKOFFICE_ACCOUNT" ]]; then missing+=(--aws-backoffice-account); fi
+  if ((${#missing[@]})); then
+    warn "AWS profiles: skipped, the command has no ${missing[*]}. Copy it again from your Setup Task."
+    return 0
+  fi
+  mkdir -p "$(dirname "$AWS_CONFIG")" || return 1
+  if [[ ! -e "$AWS_CONFIG" ]]; then (umask 077 && : >"$AWS_CONFIG") || return 1; fi
+  if ! grep -qxF "[sso-session sonada]" "$AWS_CONFIG"; then
+    printf '\n[sso-session sonada]\nsso_start_url = %s\nsso_region = us-east-1\nsso_registration_scopes = sso:account:access\n' \
+      "$AWS_PORTAL" >>"$AWS_CONFIG" || return 1
+    added=1
+  fi
+  # "profile name:account ID:role"
+  for entry in "sonada-dev-power:$AWS_DEV_ACCOUNT:PowerUserAccess" \
+    "sonada-backoffice-view:$AWS_BACKOFFICE_ACCOUNT:ViewOnlyAccess"; do
+    IFS=: read -r name account role <<<"$entry"
+    if grep -qxF "[profile $name]" "$AWS_CONFIG"; then continue; fi
+    printf '\n[profile %s]\nregion = us-east-1\noutput = json\nsso_session = sonada\nsso_account_id = %s\nsso_role_name = %s\n' \
+      "$name" "$account" "$role" >>"$AWS_CONFIG" || return 1
+    added=1
+  done
+  if ((added)); then ok "added Sonada AWS profiles to ~/.aws/config"; else ok "Sonada AWS profiles: already there"; fi
+  AWS_READY=1
 }
 
 claude_code_install() {
@@ -458,10 +505,17 @@ main() {
     case "$1" in
       --role) ROLE="${2:-}"; shift 2 || shift ;;
       --role=*) ROLE="${1#*=}"; shift ;;
+      --aws-dev-account) AWS_DEV_ACCOUNT="${2:-}"; shift 2 || shift ;;
+      --aws-dev-account=*) AWS_DEV_ACCOUNT="${1#*=}"; shift ;;
+      --aws-backoffice-account) AWS_BACKOFFICE_ACCOUNT="${2:-}"; shift 2 || shift ;;
+      --aws-backoffice-account=*) AWS_BACKOFFICE_ACCOUNT="${1#*=}"; shift ;;
       *) usage; exit 1 ;;
     esac
   done
   case "$ROLE" in rnd | product | ops) ;; *) usage; exit 1 ;; esac
+  for id in "$AWS_DEV_ACCOUNT" "$AWS_BACKOFFICE_ACCOUNT"; do
+    if [[ -n "$id" && ! "$id" =~ ^[0-9]{12}$ ]]; then echo "Not an AWS account ID (12 digits): $id"; usage; exit 1; fi
+  done
   [[ "$(uname -s)" == "Darwin" ]] || { echo "This script is for macOS."; exit 1; }
 
   # ---- 1. Xcode command line tools (git, compilers) ---------------------------
@@ -563,6 +617,7 @@ main() {
     if command -v npm >/dev/null && [[ "$(npm --version)" != "$NPM_VERSION".* ]]; then
       try "npm $NPM_VERSION" npm install --global "npm@$NPM_VERSION"
     fi
+    try "AWS profiles" aws_profiles
   else
     say "Git tools"
     install_formulae "${GIT_FORMULAE[@]}"

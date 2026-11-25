@@ -16,7 +16,7 @@ Everyone gets:
 
 R&D and Product also get git and gh, a GitHub sign-in, Sonada's git settings and an SSH key (see below).
 
-R&D also gets Docker Desktop, uv, Node with npm 11.19, Python 3.15, the AWS CLI, the Google Cloud CLI (`gcloud`) and Terraform, the `aws` and `gcloud` oh my zsh plugins, and clones `demo` and `skills` into `~/sonada-io` over SSH. The AWS and Google Cloud CLIs are installed only: sign in to them when you need them.
+R&D also gets Docker Desktop, uv, Node with npm 11.19, Python 3.15, the AWS CLI, the Google Cloud CLI (`gcloud`) and Terraform, the `aws` and `gcloud` oh my zsh plugins, and clones `demo` and `skills` into `~/sonada-io` over SSH. The Google Cloud CLI is installed only: sign in to it when you need it. The AWS CLI also gets Sonada's sign-in (IAM Identity Center) and two profiles in `~/.aws/config`, for the roles R&D has: `sonada-dev-power` (dev, PowerUserAccess, for daily work) and `sonada-backoffice-view` (backoffice, ViewOnlyAccess). Once an admin has given you AWS access, sign in with `aws sso login --profile sonada-dev-power`. Profiles already in the file, with the same name, are left as they are. This repo is public, so the account IDs aren't in it: R&D's command in the Setup Task adds `--aws-dev-account <id> --aws-backoffice-account <id>` (the onboarding engine fills them in). Without them, the script skips the profiles.
 
 ## Git and SSH (R&D, Product)
 
