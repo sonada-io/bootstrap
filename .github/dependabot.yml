@@ -1,0 +1,21 @@
+# Dependency updates and security fixes (SOC 2 control #35, with Dependabot alerts and security updates turned on
+# in the repo settings). Version updates come weekly; security updates come whenever an alert has a fix.
+# Its PRs get an ENG task like any other change: see "Dependabot PRs" in README.md.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: sunday
+      time: "06:00"
+      timezone: Asia/Jerusalem
+    # Minor and patch releases in one PR. A new major comes as its own PR, so a breaking change is reviewed alone.
+    # Groups apply to version updates only: a security fix always comes as its own PR, as soon as its alert opens.
+    groups:
+      github-actions:
+        applies-to: version-updates
+        patterns: ["*"]
+        update-types: [minor, patch]
+    commit-message:
+      prefix: "deps"

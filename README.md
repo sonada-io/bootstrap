@@ -32,3 +32,15 @@ Mila's access for Claude stays off until you turn it on in Mila (Settings ▸ St
 It is safe to run again, for example on a new laptop: it skips anything already installed. To change what gets installed, edit the lists at the top of `bootstrap.sh` (or `sonada.milaconfig`) and open a PR.
 
 This repo is public on purpose, so the command works before you have GitHub access. It holds no secrets.
+
+## Dependabot PRs
+
+Dependabot (`.github/dependabot.yml`) opens a grouped PR each Sunday per ecosystem with every minor and patch
+release, and a separate PR for each new major. Dependabot alerts and security updates are on: a security fix comes as
+its own PR as soon as an alert has one, never held for the weekly group. These alerts are the SOC 2 evidence for
+dependency scanning (control #35), so fix High and Critical ones first. An alert whose fix an `ignore` rule in
+`dependabot.yml` blocks gets no PR: fix it by hand, or dismiss it in GitHub with the reason.
+
+Each Dependabot PR gets its own new task, never reused: run `/eng-task create "<what it bumps>" --repo bootstrap`, then
+rename the PR to `ENG-<n>: <same title>`. Nothing here checks the title (this repo has no `linked-task` check), so
+this is by convention, as for every other PR.
